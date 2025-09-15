@@ -9,7 +9,7 @@ from models.index import ChatMessage
 FAISS_PATH = "/home/ai-chatbot/db_faiss_products_v1"
 
 model = OllamaLLM(
-    model="phi3:mini",
+    model="tinyllama",
     temperature=0.1,
     stop=["\nHuman:", "User:", "[INST]", "Вопрос:"]
 )
