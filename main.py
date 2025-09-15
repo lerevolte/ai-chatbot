@@ -1,7 +1,7 @@
 from fastapi.middleware.cors import CORSMiddleware
 
 from models.index import ChatMessage
-from providers.ollama import query_rag
+from providers.ollama import stream_rag_query
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -27,4 +27,4 @@ async def read_root():
 
 @app.post("/chat/{chat_id}")
 async def ask(chat_id: str, message: ChatMessage):
-    return {"response": query_rag(message, chat_id)}
+    return {"response": stream_rag_query(message, chat_id)}

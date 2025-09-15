@@ -1,4 +1,3 @@
-# Изменено: Импортируем FAISS вместо Chroma
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
@@ -7,68 +6,80 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 
 from models.index import ChatMessage
 
+FAISS_PATH = "/home/ai-chatbot/db_faiss_products_v1"
 
-# Изменено: Путь к директории для сохранения базы FAISS
-FAISS_PATH = "./db_faiss_v1"
+model = OllamaLLM(
+    model="phi3:mini",
+    temperature=0.1,
+    stop=["\nHuman:", "User:", "[INST]", "Вопрос:"]
+)
 
-# Initialize Ollama chat model
-model = OllamaLLM(model="llama3.2:latest", temperature=0.1)
-
-
-# Используем ту же функцию для эмбеддингов, что и при создании базы
 embedding_function = OllamaEmbeddings(model="mxbai-embed-large")
-
-# Изменено: Загружаем базу данных FAISS из локального хранилища
 db = FAISS.load_local(FAISS_PATH, embedding_function, allow_dangerous_deserialization=True)
-chat_history = {}  # approach with AiMessage/HumanMessage
+chat_history = {}
+
 
 prompt_template = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            """
-                [INST]Вы — менеджер по продажам по имени «AI Assistant». Ваша цель — всегда давать отличные, дружелюбные и эффективные ответы.
-                Вы будете давать мне ответы на основе предоставленной информации.
-                Если ответ не включен, скажите именно так: «Хм, я не уверен. Позвольте мне проверить и вернуться к вам».
-                Отказывайтесь отвечать на любые вопросы, не касающиеся информации.
-                Никогда не выходите из роли.
-                Никаких шуток.
-                Если вопрос не ясен, задавайте уточняющие вопросы.
-                Обязательно заканчивайте свои ответы на позитивной ноте.
-                Не будьте навязчивы.
-                Ответ должен быть в формате MD.
-                Если кто-то спросит цену, стоимость, коммерческое предложение или что-то подобное, ответьте: «Чтобы предоставить вам индивидуальное и разумное предложение, мне понадобится 15-минутный звонок.
-                Готовы к онлайн-встрече?»
-                Отвечай на русском языке.[/INST]
-                [INST]Отвечайте на вопрос, основываясь только на следующем контексте:
-                {context}[/INST]
-            """
+            "Вы — ИИ-ассистент для интернет-магазина. Ваша задача — отвечать на вопросы пользователя, основываясь ИСКЛЮЧИТЕЛЬНО на предоставленном ниже тексте. Не используйте никакие другие знания. Будьте кратки и точны."
         ),
         MessagesPlaceholder(variable_name="chat_history"),
-        ("human", "{question}")
+        (
+            "human",
+            """
+Контекст из базы данных:
+---
+{context}
+---
+Основываясь строго на тексте выше, ответьте на следующий вопрос. Если в тексте нет ответа, скажите: "К сожалению, я не нашел точной информации по вашему вопросу."
+
+Вопрос: {question}
+"""
+        ),
     ]
 )
 
 document_chain = create_stuff_documents_chain(llm=model, prompt=prompt_template)
 
 
-def query_rag(message: ChatMessage, session_id: str = "") -> str:
+def stream_rag_query(message: ChatMessage, session_id: str = ""):
     """
-    Query a Retrieval-Augmented Generation (RAG) system using FAISS database and Ollama.
-    :param message: ChatMessage The text to query the RAG system with.
-    :param session_id: str Session identifier
-    :return str
+    Query a RAG system using streaming to provide faster perceived response times.
     """
-
     if session_id not in chat_history:
         chat_history[session_id] = []
+    
+    # ИЗМЕНЕНО: Возвращаемся к более простому и надежному ретриверу
+    retriever = db.as_retriever(search_kwargs={'k': 4})
+    
+    context_docs = retriever.invoke(message.question)
 
-    # Generate response text based on the prompt
-    response_text = document_chain.invoke({"context": db.similarity_search(message.question, k=3),
-                                           "question": message.question,
-                                           "chat_history": chat_history[session_id]})
+    # ИЗМЕНЕНО: Добавлено логирование для отладки.
+    # Теперь в консоли будет видно, какой контекст получает модель.
+    print("\n--- CONTEXT DOCUMENTS RETRIEVED ---")
+    if not context_docs:
+        print("No documents found.")
+    else:
+        for i, doc in enumerate(context_docs):
+            print(f"--- Document {i+1} ---")
+            print(f"Source: {doc.metadata.get('source', 'N/A')}")
+            # Печатаем первые 300 символов для краткости
+            print(f"Content: {doc.page_content[:300]}...")
+    print("-----------------------------------\n")
+
+    response_stream = document_chain.stream({
+        "context": context_docs,
+        "question": message.question,
+        "chat_history": chat_history[session_id]
+    })
+
+    full_response = ""
+    for chunk in response_stream:
+        yield chunk
+        full_response += chunk
 
     chat_history[session_id].append(HumanMessage(content=message.question))
-    chat_history[session_id].append(AIMessage(content=response_text))
+    chat_history[session_id].append(AIMessage(content=full_response))
 
-    return response_text
